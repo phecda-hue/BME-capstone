@@ -1,0 +1,76 @@
+# config/thresholds.yaml
+
+# ─────────────────────────────────────────
+# 낙상 판정 기준
+# 모든 조건이 동시에 만족될 때 낙상으로 판정
+# ─────────────────────────────────────────
+fall_detection:
+
+  # 두부 keypoint 수직 속도 (m/s)
+  # 이 값 이상으로 빠르게 아래로 이동하면 낙상 후보
+  head_velocity_threshold: 1.5
+
+  # 상체 기울기 각도 (degree)
+  # 어깨-엉덩이 벡터가 수평에 가까워지면 낙상 가능성 높음
+  body_angle_threshold: 50.0
+
+  # bounding box 종횡비 변화율
+  # 세로→가로로 급격히 변하면 낙상으로 판단
+  bbox_ratio_threshold: 0.6    # width/height 가 이 값 이상이면 가로로 눕힌 상태
+
+  # 낙상 판정 유지 프레임 수
+  # 한 프레임 오감지를 걸러내기 위해 N프레임 연속 조건 충족 시 확정
+  confirm_frames: 3
+
+  # 낙상 후 재판정 억제 시간 (초)
+  # 같은 사람이 연속으로 낙상 판정되는 것을 방지
+  cooldown_sec: 5.0
+
+
+# ─────────────────────────────────────────
+# 위험도 등급 (3단계)
+# impulse = HEAD_MASS_KG * head_velocity (kg·m/s)
+# ─────────────────────────────────────────
+danger_level:
+
+  head_mass_kg: 5.0     # 성인 두부 추정 질량 (고정값)
+
+  # 정상: impulse < low 이하
+  # 주의: low <= impulse < high
+  # 위험: impulse >= high
+  impulse_low:  10.0    # 정상 / 주의 경계 (kg·m/s) → 약 2.0 m/s 낙하
+  impulse_high: 25.0    # 주의 / 위험 경계 (kg·m/s) → 약 5.0 m/s 낙하
+
+  labels:
+    normal:  "정상"
+    caution: "주의"
+    danger:  "위험"
+
+
+# ─────────────────────────────────────────
+# 화면 표시 설정
+# ─────────────────────────────────────────
+visualizer:
+
+  show_depth_overlay: true      # 깊이맵 반투명 오버레이 표시
+  show_keypoints: true          # keypoint 표시
+  show_bbox: true               # bounding box 표시
+  show_track_id: true           # 트랙 ID 표시
+  show_danger_level: true       # 위험도 등급 표시
+  show_impulse_value: true      # 충격량 수치 표시
+
+  # 위험도별 bounding box 색상 (BGR)
+  colors:
+    normal:  [0, 255, 0]        # 초록
+    caution: [0, 165, 255]      # 주황
+    danger:  [0, 0, 255]        # 빨강
+
+
+# ─────────────────────────────────────────
+# 클립 저장 (현재 비활성화 / 필요 시 true로 변경)
+# ─────────────────────────────────────────
+clip:
+  enabled: false
+  save_dir: "logs/clips"
+  pre_fall_sec: 3.0     # 낙상 판정 전 몇 초를 함께 저장할지
+  post_fall_sec: 2.0    # 낙상 판정 후 몇 초를 함께 저장할지

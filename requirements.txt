@@ -1,0 +1,23 @@
+# 추론 엔진
+torch>=2.1.0
+torchvision>=0.16.0
+transformers>=4.40.0        # DA2 Metric HuggingFace 로드용
+
+# 모델
+ultralytics>=8.2.0          # YOLOv11-pose
+depth-anything-v2           # DA2 (또는 HuggingFace hub 직접 사용)
+
+# 영상 처리
+opencv-python>=4.9.0
+numpy>=1.26.0
+
+# 추적
+lap>=0.4.0                  # ByteTrack 내부 의존성
+
+# 설정
+pyyaml>=6.0
+
+# 알림 (선택)
+requests>=2.31.0            # HTTP 알림
+
+deep-sort-realtime>=1.3.2
