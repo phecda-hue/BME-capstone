@@ -80,11 +80,12 @@ class FallResult:
     posture:       PostureState
 
     # 디버그 / 시각화용 수치
-    angle_ratio:   float = 0.0   # 상체 기울기 ratio [논문 1]
-    hip_velocity:  float = 0.0   # hip 실제 속도 (m/s)
-    cog_velocity:  float = 0.0   # CoG 실제 속도 (m/s)
-    head_velocity: float = 0.0   # head 실제 속도 (m/s), ImpactEstimator로 전달
-    bbox_ratio:    float = 0.0   # bounding box W/H [논문 2]
+    angle_ratio:   float = 0.0          # 상체 기울기 ratio [논문 1]
+    hip_velocity:  float = 0.0          # hip 실제 속도 (m/s)
+    cog_velocity:  float = 0.0          # CoG 실제 속도 (m/s)
+    head_velocity: float = 0.0          # head 실제 속도 (m/s), ImpactEstimator로 전달
+    bbox_ratio:    float = 0.0          # bounding box W/H [논문 2]
+    l_factor:      float | None = None  # 체형 보정 계수 [논문 2], ImpactEstimator로 전달
 
 
 # ─────────────────────────────────────────
@@ -103,6 +104,10 @@ class FallDetector:
 
     # 각도 계산 분모 0 방지 상수 [논문 1]
     _EPSILON = 1e-5
+
+    # 성인 기준 L_factor 픽셀값 (어깨-엉덩이 거리)
+    # _classify_posture 의 NORM 값과 동일하게 유지
+    _REFERENCE_L = 150.0
 
     def __init__(self, threshold_cfg: dict, camera_cfg: dict):
         """
@@ -246,7 +251,7 @@ class FallDetector:
         # ── 낙상 1차 판정 ──────────────────────────────────────────────────
         is_fall_candidate = self._is_fall_candidate(
             angle_ratio, hip_velocity, cog_velocity,
-            hip, feet, bbox_ratio,
+            hip, feet, bbox_ratio, l_factor,
         )
 
         # ── N프레임 연속 확정 ──────────────────────────────────────────────
@@ -277,6 +282,7 @@ class FallDetector:
             cog_velocity  = cog_velocity,
             head_velocity = head_velocity,   # ImpactEstimator 로 전달
             bbox_ratio    = bbox_ratio,
+            l_factor      = l_factor,        # ImpactEstimator 로 전달
         )
 
     # ─────────────────────────────────────────
@@ -404,17 +410,23 @@ class FallDetector:
         hip:          np.ndarray | None,
         feet:         np.ndarray | None,
         bbox_ratio:   float,
+        l_factor:     float | None,
     ) -> bool:
         """
         낙상 1차 판정 — 복합 조건 평가
 
         조건 구성:
-          [A] 상체 기울기  : angle_ratio < threshold         [논문 1]
-          [B] hip 속도     : hip_velocity > threshold         [기존 의사 코드]
-          [C] hip y좌표    : hip_y > hip_y_threshold          [기존 의사 코드]
-          [D] 발-엉덩이 차 : |y_hips - y_feet| < threshold   [논문 1]
-          [E] bbox 비율    : bbox W/H > threshold             [논문 2]
-          [F] CoG 속도     : cog_velocity > threshold         [논문 1]
+          [A] 상체 기울기  : angle_ratio < threshold                  [논문 1]
+          [B] hip 속도     : hip_velocity > threshold × L_factor 보정  [기존 + 논문 2]
+          [C] hip y좌표    : hip_y > hip_y_threshold                   [기존 의사 코드]
+          [D] 발-엉덩이 차 : |y_hips - y_feet| < threshold            [논문 1]
+          [E] bbox 비율    : bbox W/H > threshold                      [논문 2]
+          [F] CoG 속도     : cog_velocity > threshold × L_factor 보정  [논문 1 + 논문 2]
+
+        L_factor 속도 보정 [논문 2]:
+          어린이(l_factor 작음) → 임계값 낮아짐 → 더 민감하게 감지
+          성인(l_factor 큼)    → 임계값 기준값 유지
+          l_factor 없으면 보정 없이 기본 임계값 사용
 
         판정 로직:
           ([A] AND [B] AND [C] AND [D])  →  낙상 후보 (핵심 조건)
@@ -427,11 +439,22 @@ class FallDetector:
         hip_y  = float(hip[1])
         feet_y = float(feet[1]) if feet is not None else None
 
+        # ── L_factor 속도 임계값 보정 [논문 2] ───────────────────────────
+        # 성인 기준 L_factor ≈ 150px → 보정 없음
+        # 어린이(예: L_factor ≈ 100px) → 임계값 × (100/150) ≈ 0.67배로 낮아짐
+        if l_factor and l_factor > 0:
+            scale = l_factor / self._REFERENCE_L
+        else:
+            scale = 1.0   # l_factor 없으면 보정 없음
+
+        adj_hip_vel_threshold = self.hip_velocity_threshold * scale
+        adj_cog_vel_threshold = self.cog_velocity_threshold * scale
+
         # 핵심 조건 [논문 1 + 기존 의사 코드]
-        cond_angle    = angle_ratio < self.body_angle_ratio_threshold         # [A]
-        cond_hip_vel  = hip_velocity > self.hip_velocity_threshold            # [B]
-        cond_hip_y    = hip_y > self.hip_y_threshold                          # [C]
-        cond_feet_hip = (                                                      # [D]
+        cond_angle    = angle_ratio < self.body_angle_ratio_threshold          # [A]
+        cond_hip_vel  = hip_velocity > adj_hip_vel_threshold                   # [B]
+        cond_hip_y    = hip_y > self.hip_y_threshold                           # [C]
+        cond_feet_hip = (                                                       # [D]
             feet_y is not None
             and abs(hip_y - feet_y) < self.feet_hip_y_diff_threshold
         )
@@ -439,8 +462,8 @@ class FallDetector:
         core_condition = cond_angle and cond_hip_vel and cond_hip_y and cond_feet_hip
 
         # 보조 조건 [논문 2]
-        cond_bbox    = bbox_ratio > self.bbox_ratio_threshold                 # [E]
-        cond_cog_vel = cog_velocity > self.cog_velocity_threshold             # [F]
+        cond_bbox    = bbox_ratio > self.bbox_ratio_threshold                  # [E]
+        cond_cog_vel = cog_velocity > adj_cog_vel_threshold                    # [F]
 
         aux_condition = cond_bbox and (cond_hip_vel or cond_cog_vel)
 

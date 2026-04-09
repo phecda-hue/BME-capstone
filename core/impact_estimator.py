@@ -89,6 +89,9 @@ class ImpactEstimator:
         impact_results = estimator.update(fall_results, persons, depth_map)
     """
 
+    # 성인 기준 L_factor 픽셀값 (fall_detector.py 의 _REFERENCE_L 과 동일)
+    _REFERENCE_L = 150.0
+
     def __init__(self, threshold_cfg: dict):
         """
         Args:
@@ -96,7 +99,9 @@ class ImpactEstimator:
         """
         dl = threshold_cfg["danger_level"]
 
-        # 성인 두부 추정 질량 (kg)
+        # 성인 두부 기준 질량 (kg)
+        # 실제 사용 질량은 L_factor 로 보정됨
+        # estimated_mass = head_mass_kg × (l_factor / REFERENCE_L)
         self.head_mass_kg: float = dl["head_mass_kg"]
 
         # 머리 위치 임계값 (픽셀)
@@ -104,10 +109,10 @@ class ImpactEstimator:
         self.floor_y:      float = dl["floor_y"]
         self.floor_margin: float = dl["floor_margin"]
 
-        # Δv 임계값 (m/s)
-        # impulse = head_mass_kg × delta_v (kg·m/s)
-        self.delta_v_caution: float = dl["delta_v_caution"]
-        self.delta_v_danger:  float = dl["delta_v_danger"]
+        # 충격량(impulse = estimated_mass × Δv, kg·m/s) 임계값
+        # L_factor 보정된 질량을 사용하므로 delta_v 가 아닌 impulse 기준으로 판정
+        self.impulse_caution: float = dl["impulse_caution"]
+        self.impulse_danger:  float = dl["impulse_danger"]
 
         # ── 트랙 ID별 상태 저장 ──────────────────
         # {track_id: ImpactState}
@@ -148,6 +153,7 @@ class ImpactEstimator:
             if fall_result.fall_detected:
                 impact_result = self._calc_impact(
                     state, head, fall_result.head_velocity,
+                    fall_result.l_factor,
                 )
             else:
                 # 낙상 미감지 — 위험도 없음, head 속도만 갱신
@@ -184,13 +190,23 @@ class ImpactEstimator:
         state:         ImpactState,
         head:          np.ndarray | None,
         head_velocity: float,
+        l_factor:      float | None,
     ) -> "ImpactResult":
         """
         낙상 확정 후 머리 충격량으로 위험도 판정
 
+        두부 질량 추정 [논문 2 L_factor 응용]:
+          estimated_mass = head_mass_kg × (l_factor / REFERENCE_L)
+          → 어린이(l_factor 작음) → 질량 작게 추정
+          → 성인(l_factor 큼)    → 질량 기준값 유지
+          → l_factor 없으면 head_mass_kg 고정값 사용
+
         물리 공식: I = m × Δv
           Δv = |prev_head_velocity - head_velocity|
           바닥 충돌 순간 속도가 0에 가까워지면 Δv 가 커짐
+
+        위험도는 delta_v 가 아닌 impulse(kg·m/s) 기준으로 판정
+          → 체형이 반영된 실제 충격량으로 판정
 
         머리가 floor_y 이상 내려왔을 때만 계산
         그 외(머리를 바닥에 부딪히지 않은 낙상)는 LOW 반환
@@ -201,7 +217,6 @@ class ImpactEstimator:
         tid = state.track_id
 
         # 머리가 바닥 근처에 있는지 확인
-        # y좌표가 클수록 화면 하단 (바닥에 가까움)
         if head is None or float(head[1]) <= self.floor_y - self.floor_margin:
             return ImpactResult(
                 track_id     = tid,
@@ -210,13 +225,20 @@ class ImpactEstimator:
                 delta_v      = 0.0,
             )
 
-        # 충격량 계산: I = m × Δv
-        delta_v = abs(state.prev_head_velocity - head_velocity)
-        impulse = self.head_mass_kg * delta_v
+        # ── L_factor 기반 두부 질량 추정 [논문 2 응용] ───────────────────
+        if l_factor and l_factor > 0:
+            estimated_mass = self.head_mass_kg * (l_factor / self._REFERENCE_L)
+        else:
+            estimated_mass = self.head_mass_kg   # l_factor 없으면 고정값
 
-        if delta_v >= self.delta_v_danger:
+        # ── 충격량 계산: I = m × Δv ───────────────────────────────────────
+        delta_v = abs(state.prev_head_velocity - head_velocity)
+        impulse = estimated_mass * delta_v
+
+        # ── impulse 기준 위험도 판정 ──────────────────────────────────────
+        if impulse >= self.impulse_danger:
             level = DangerLevel.DANGER
-        elif delta_v >= self.delta_v_caution:
+        elif impulse >= self.impulse_caution:
             level = DangerLevel.CAUTION
         else:
             level = DangerLevel.LOW

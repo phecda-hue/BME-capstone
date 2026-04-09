@@ -71,16 +71,16 @@ danger_level:
   floor_y: 900
   floor_margin: 50
 
-  # delta_head_velocity (Δv, m/s) 임계값
-  # 의사 코드의 threshold_warning, threshold_danger에 해당
-  # impulse = head_mass_kg × delta_head_velocity (kg·m/s)
+  # 충격량(impulse = estimated_mass × Δv, kg·m/s) 임계값
+  # L_factor로 보정된 두부 질량을 사용하므로 delta_v가 아닌 impulse 기준으로 판정
   #
-  # 참고 수치:
-  #   delta_v ~1.5 m/s → impulse ~7.5  N·s  (저위험)
-  #   delta_v ~3.0 m/s → impulse ~15.0 N·s  (주의)
-  #   delta_v ~5.0 m/s → impulse ~25.0 N·s  (위험)
-  delta_v_caution: 3.0    # 저위험 / 주의 경계 (m/s)
-  delta_v_danger:  5.0    # 주의   / 위험 경계 (m/s)
+  # 참고 수치 (성인 기준 head_mass ≈ 5kg):
+  #   Δv ~1.5 m/s → impulse ~7.5  N·s  (저위험)
+  #   Δv ~3.0 m/s → impulse ~15.0 N·s  (주의)
+  #   Δv ~5.0 m/s → impulse ~25.0 N·s  (위험)
+  # 어린이는 l_factor가 작아 같은 Δv에서 impulse가 더 낮게 계산됨
+  impulse_caution: 15.0   # 저위험 / 주의 경계 (kg·m/s)
+  impulse_danger:  25.0   # 주의   / 위험 경계 (kg·m/s)
 
   # 위험도 라벨
   labels:
