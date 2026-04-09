@@ -1,25 +1,45 @@
 # config/thresholds.yaml
 
 # ─────────────────────────────────────────
-# 낙상 판정 기준
-# 모든 조건이 동시에 만족될 때 낙상으로 판정
+# 낙상 1차 판정 기준 (의사 코드 기반)
+# 아래 조건들이 동시에 충족되면 낙상 후보로 등록
 # ─────────────────────────────────────────
 fall_detection:
 
-  # 두부 keypoint 수직 속도 (m/s)
-  # 이 값 이상으로 빠르게 아래로 이동하면 낙상 후보
-  head_velocity_threshold: 1.5
+  # 상체 기울기 비율 (논문 1 기준: |Δy / (Δx + ε)|)
+  # 어깨-엉덩이 벡터의 기울기 ratio
+  # 1.0 = 45°, 0.5 ≈ 27° (수평에 가까울수록 낙상 가능성 높음)
+  # 낙상 조건: angle_ratio < 0.5 (논문 1)
+  body_angle_ratio_threshold: 0.5
 
-  # 상체 기울기 각도 (degree)
-  # 어깨-엉덩이 벡터가 수평에 가까워지면 낙상 가능성 높음
-  body_angle_threshold: 50.0
+  # 엉덩이(hip) 실제 이동 속도 임계값 (m/s)
+  # 이 값 이상으로 빠르게 이동하면 낙상 후보
+  # 의사 코드의 threshold_v에 해당
+  # 참고: 성인 보행 속도 ~1.4 m/s, 낙상 시 ~2.0 m/s 이상
+  hip_velocity_threshold: 2.0
 
-  # bounding box 종횡비 변화율
-  # 세로→가로로 급격히 변하면 낙상으로 판단
-  bbox_ratio_threshold: 0.6    # width/height 가 이 값 이상이면 가로로 눕힌 상태
+  # 엉덩이(hip) y좌표 임계값 (픽셀)
+  # hip_y가 이 값보다 커야 낙상으로 판정 (화면 하단 = 값이 큼)
+  # 의사 코드의 threshold_h에 해당
+  # 실측 후 조정 필요 (해상도 1080 기준 초기값)
+  hip_y_threshold: 400
 
-  # 낙상 판정 유지 프레임 수
-  # 한 프레임 오감지를 걸러내기 위해 N프레임 연속 조건 충족 시 확정
+  # 발목-엉덩이 y좌표 차이 임계값 (픽셀)
+  # |y_hips - y_feet| < 이 값이면 몸이 수평으로 누운 상태 (논문 1)
+  # 낙상과 슬라이드 착지 오탐 구분에 유효
+  feet_hip_y_diff_threshold: 30
+
+  # bounding box 종횡비 임계값 (논문 2의 H < W 조건)
+  # width / height 가 이 값 이상이면 가로로 누운 상태
+  bbox_ratio_threshold: 0.9
+
+  # 무게중심(CoG) 수직 이동 속도 임계값 (m/s)
+  # 논문 1의 CoG 급격한 하강 조건
+  # hip_velocity와 함께 OR 조건으로 사용 권장
+  cog_velocity_threshold: 1.8
+
+  # 낙상 판정 확정 프레임 수
+  # 연속 N프레임 조건 충족 시 낙상으로 확정 (오감지 방지)
   confirm_frames: 3
 
   # 낙상 후 재판정 억제 시간 (초)
@@ -29,20 +49,42 @@ fall_detection:
 
 # ─────────────────────────────────────────
 # 위험도 등급 (3단계)
-# impulse = HEAD_MASS_KG * head_velocity (kg·m/s)
+# 낙상 확정 후 머리의 충격으로 위험도를 판단
+#
+# 물리 공식: I = m × Δv  (충격량 = 질량 × 속도 변화량)
+# Δv = |prev_head_velocity - head_velocity|
+#   → 바닥 충돌 순간 속도가 급감하면 Δv가 커짐
+#   → 빠르게 충돌할수록 더 큰 충격으로 판단
+#
+# 머리가 floor_y 이상 내려왔을 때만 위험도 계산
+# 그 외는 "저위험(low)" 으로 고정
 # ─────────────────────────────────────────
 danger_level:
 
-  head_mass_kg: 5.0     # 성인 두부 추정 질량 (고정값)
+  # 성인 두부 추정 질량 (kg)
+  head_mass_kg: 5.0
 
-  # 정상: impulse < low 이하
-  # 주의: low <= impulse < high
-  # 위험: impulse >= high
-  impulse_low:  10.0    # 정상 / 주의 경계 (kg·m/s) → 약 2.0 m/s 낙하
-  impulse_high: 25.0    # 주의 / 위험 경계 (kg·m/s) → 약 5.0 m/s 낙하
+  # 머리 위치 임계값 (픽셀)
+  # head_y > floor_y - margin 일 때만 충격량 계산
+  # 의사 코드의 floor_y, margin에 해당
+  # 해상도 1080 기준 초기값, 실측 후 조정 필요
+  floor_y: 900
+  floor_margin: 50
 
+  # delta_head_velocity (Δv, m/s) 임계값
+  # 의사 코드의 threshold_warning, threshold_danger에 해당
+  # impulse = head_mass_kg × delta_head_velocity (kg·m/s)
+  #
+  # 참고 수치:
+  #   delta_v ~1.5 m/s → impulse ~7.5  N·s  (저위험)
+  #   delta_v ~3.0 m/s → impulse ~15.0 N·s  (주의)
+  #   delta_v ~5.0 m/s → impulse ~25.0 N·s  (위험)
+  delta_v_caution: 3.0    # 저위험 / 주의 경계 (m/s)
+  delta_v_danger:  5.0    # 주의   / 위험 경계 (m/s)
+
+  # 위험도 라벨
   labels:
-    normal:  "정상"
+    low:     "저위험"
     caution: "주의"
     danger:  "위험"
 
@@ -58,6 +100,7 @@ visualizer:
   show_track_id: true           # 트랙 ID 표시
   show_danger_level: true       # 위험도 등급 표시
   show_impulse_value: true      # 충격량 수치 표시
+  show_cog: true                # 무게중심(CoG) 표시
 
   # 위험도별 bounding box 색상 (BGR)
   colors:

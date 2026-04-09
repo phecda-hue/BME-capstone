@@ -43,3 +43,7 @@ tracker:
   max_age: 30             # 미감지 허용 프레임 수
   n_init: 3               # 트랙 확정까지 필요한 연속 감지 수
   nn_budget: 100          # ReID 특징 벡터 저장 최대 수
+
+depth_estimator:
+  ema_alpha: 0.4        # 현재 프레임 반영 비중 (0.0~1.0)
+  spike_threshold: 1.0  # 이상값 판정 임계값 (m)
