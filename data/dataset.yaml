@@ -1,0 +1,13 @@
+# data/dataset.yaml
+
+path: data/annotated      # 프로젝트 루트 기준 상대 경로
+train: images/train
+val:   images/val
+test:  images/test        # 선택
+
+nc: 1                     # 클래스 수 (person만)
+names: ["person"]
+
+# YOLOv11-pose keypoint 설정
+kpt_shape: [17, 3]        # 17개 관절, [x, y, visibility]
+flip_idx: [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
