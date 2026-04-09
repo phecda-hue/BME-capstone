@@ -64,3 +64,10 @@ Thumbs.db
 *.jpg
 *.png
 test_*
+
+# 데이터
+data/raw/
+data/annotated/
+
+# 학습 결과
+train/runs/

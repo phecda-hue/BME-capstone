@@ -12,9 +12,6 @@ PoseModel.infer() 반환값과 연동
   PoseEstimator.update()   →  track_id 별 keypoint 평활화
   FallDetector.update()    →  track_id 별 낙상 판정
 
-설치:
-  pip install supervision
-
 참고:
   supervision ByteTrack + YOLOv11-pose 공식 파이프라인:
   https://supervision.roboflow.com/latest/how_to/track_objects/
