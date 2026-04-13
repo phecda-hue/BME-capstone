@@ -243,15 +243,10 @@ class FallDetector:
         # ── bbox W/H 비율 [논문 2] ────────────────────────────────────────
         bbox_ratio = self._calc_bbox_ratio(bbox)
 
-        # ── 자세 상태 분류 [논문 1] ───────────────────────────────────────
-        posture = self._classify_posture(
-            angle_ratio, hip, shoulder, feet, l_factor,
-        )
-
-        # ── 낙상 1차 판정 ──────────────────────────────────────────────────
-        is_fall_candidate = self._is_fall_candidate(
+        # ── 자세 분류 + 낙상 후보 판정 (통합) ───────────────────────────
+        posture, is_fall_candidate = self._assess(
             angle_ratio, hip_velocity, cog_velocity,
-            hip, feet, bbox_ratio, l_factor,
+            hip, shoulder, feet, bbox_ratio, l_factor,
         )
 
         # ── N프레임 연속 확정 ──────────────────────────────────────────────
@@ -354,110 +349,81 @@ class FallDetector:
         h = max(y2 - y1, 1)
         return w / h
 
-    def _classify_posture(
-        self,
-        angle_ratio: float,
-        hip:         np.ndarray | None,
-        shoulder:    np.ndarray | None,
-        feet:        np.ndarray | None,
-        l_factor:    float | None,
-    ) -> PostureState:
-        """
-        자세 상태 4단계 분류 [논문 1]
-
-        기준 (논문 1):
-          낙상      : angle_ratio < 0.5  AND  y_hips < y_shoulders - 20
-                      AND  |y_hips - y_feet| < 30
-          착석      : angle_ratio > 0.6  AND  y_hips > y_shoulders
-          상체기울임 : 0.3 < angle_ratio < 0.6  AND  y_hips > y_feet + 30
-          기립      : angle_ratio > 0.7  AND  y_hips > y_shoulders
-
-        픽셀 상수(20, 30)는 L_factor로 체형 보정 [논문 2]
-        """
-        if hip is None or shoulder is None:
-            return PostureState.STANDING
-
-        # 체형 보정 계수 적용 [논문 2]
-        # 성인 기준 L_factor ≈ 150px 가정하여 정규화
-        lf   = l_factor if l_factor else 1.0
-        NORM = 150.0
-        margin_fall  = 20.0 * (lf / NORM)
-        margin_horiz = 30.0 * (lf / NORM)
-
-        hip_y      = float(hip[1])
-        shoulder_y = float(shoulder[1])
-        feet_y     = float(feet[1]) if feet is not None else hip_y + 9999
-
-        hip_above_shoulder = hip_y < shoulder_y - margin_fall
-        body_horizontal    = abs(hip_y - feet_y) < margin_horiz
-
-        if angle_ratio < 0.5 and hip_above_shoulder and body_horizontal:
-            return PostureState.FALLEN
-        elif angle_ratio > 0.7 and hip_y > shoulder_y:
-            return PostureState.STANDING
-        elif angle_ratio > 0.6 and hip_y > shoulder_y:
-            return PostureState.SITTING
-        elif 0.3 < angle_ratio < 0.6 and hip_y > feet_y - margin_horiz:
-            return PostureState.LEANING
-        else:
-            return PostureState.STANDING
-
-    def _is_fall_candidate(
+    def _assess(
         self,
         angle_ratio:  float,
         hip_velocity: float,
         cog_velocity: float,
         hip:          np.ndarray | None,
+        shoulder:     np.ndarray | None,
         feet:         np.ndarray | None,
         bbox_ratio:   float,
         l_factor:     float | None,
-    ) -> bool:
+    ) -> tuple[PostureState, bool]:
         """
-        낙상 1차 판정 — 복합 조건 평가
+        자세 분류 + 낙상 후보 판정을 한 번에 수행
 
-        조건 구성:
-          [A] 상체 기울기  : angle_ratio < threshold                  [논문 1]
-          [B] hip 속도     : hip_velocity > threshold × L_factor 보정  [기존 + 논문 2]
-          [C] hip y좌표    : hip_y > hip_y_threshold                   [기존 의사 코드]
-          [D] 발-엉덩이 차 : |y_hips - y_feet| < threshold            [논문 1]
-          [E] bbox 비율    : bbox W/H > threshold                      [논문 2]
-          [F] CoG 속도     : cog_velocity > threshold × L_factor 보정  [논문 1 + 논문 2]
+        _classify_posture() 와 _is_fall_candidate() 를 통합
+        두 함수가 공통으로 사용하는 값(hip_y, feet_y, margin 등)을
+        한 번만 계산하여 중복 연산 제거
 
-        L_factor 속도 보정 [논문 2]:
-          어린이(l_factor 작음) → 임계값 낮아짐 → 더 민감하게 감지
-          성인(l_factor 큼)    → 임계값 기준값 유지
-          l_factor 없으면 보정 없이 기본 임계값 사용
-
-        판정 로직:
-          ([A] AND [B] AND [C] AND [D])  →  낙상 후보 (핵심 조건)
-          OR
-          ([E] AND ([B] OR [F]))         →  보조 조건 (bbox 기반)
+        Returns:
+            (PostureState, is_fall_candidate)
         """
+        # ── 공통 전처리 ───────────────────────────────────────────────────
+
+        # hip 없으면 판정 불가
         if hip is None:
-            return False
+            return PostureState.STANDING, False
 
         hip_y  = float(hip[1])
         feet_y = float(feet[1]) if feet is not None else None
 
-        # ── L_factor 속도 임계값 보정 [논문 2] ───────────────────────────
-        # 성인 기준 L_factor ≈ 150px → 보정 없음
-        # 어린이(예: L_factor ≈ 100px) → 임계값 × (100/150) ≈ 0.67배로 낮아짐
-        if l_factor and l_factor > 0:
-            scale = l_factor / self._REFERENCE_L
-        else:
-            scale = 1.0   # l_factor 없으면 보정 없음
+        # L_factor 체형 보정 [논문 2]
+        # 성인 기준 REFERENCE_L ≈ 150px
+        lf    = l_factor if (l_factor and l_factor > 0) else self._REFERENCE_L
+        scale = lf / self._REFERENCE_L
 
+        # 자세 분류용 마진 (픽셀, 논문 1 고정값을 체형에 맞게 보정)
+        margin_fall  = 20.0 * scale   # 낙상 판정 y 마진
+        margin_horiz = 30.0 * scale   # 수평 판정 y 마진
+
+        # 속도 임계값 보정 (어린이 → 임계값 낮아짐) [논문 2]
         adj_hip_vel_threshold = self.hip_velocity_threshold * scale
         adj_cog_vel_threshold = self.cog_velocity_threshold * scale
 
+        # 공통 조건 계산
+        shoulder_y = float(shoulder[1]) if shoulder is not None else None
+
+        hip_above_shoulder = (
+            shoulder_y is not None
+            and hip_y < shoulder_y - margin_fall
+        )
+        body_horizontal = (
+            feet_y is not None
+            and abs(hip_y - feet_y) < margin_horiz
+        )
+
+        # ── 자세 분류 [논문 1] ────────────────────────────────────────────
+        if shoulder is None:
+            posture = PostureState.STANDING
+        elif angle_ratio < 0.5 and hip_above_shoulder and body_horizontal:
+            posture = PostureState.FALLEN
+        elif angle_ratio > 0.7 and hip_y > (shoulder_y or 0):
+            posture = PostureState.STANDING
+        elif angle_ratio > 0.6 and hip_y > (shoulder_y or 0):
+            posture = PostureState.SITTING
+        elif 0.3 < angle_ratio < 0.6 and feet_y is not None and hip_y > feet_y - margin_horiz:
+            posture = PostureState.LEANING
+        else:
+            posture = PostureState.STANDING
+
+        # ── 낙상 후보 판정 ────────────────────────────────────────────────
         # 핵심 조건 [논문 1 + 기존 의사 코드]
         cond_angle    = angle_ratio < self.body_angle_ratio_threshold          # [A]
         cond_hip_vel  = hip_velocity > adj_hip_vel_threshold                   # [B]
         cond_hip_y    = hip_y > self.hip_y_threshold                           # [C]
-        cond_feet_hip = (                                                       # [D]
-            feet_y is not None
-            and abs(hip_y - feet_y) < self.feet_hip_y_diff_threshold
-        )
+        cond_feet_hip = body_horizontal                                        # [D] 공통값 재사용
 
         core_condition = cond_angle and cond_hip_vel and cond_hip_y and cond_feet_hip
 
@@ -467,7 +433,9 @@ class FallDetector:
 
         aux_condition = cond_bbox and (cond_hip_vel or cond_cog_vel)
 
-        return core_condition or aux_condition
+        is_candidate = core_condition or aux_condition
+
+        return posture, is_candidate
 
     def _confirm_fall(self, state: PersonState, is_candidate: bool) -> bool:
         """
