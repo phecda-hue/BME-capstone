@@ -6,6 +6,7 @@ models/checkpoints/
 *.pt
 *.onnx
 *.engine
+models/*.pt
 
 # ─────────────────────────────────────────
 # 설정 (민감 정보 포함 가능)
