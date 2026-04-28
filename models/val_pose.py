@@ -10,42 +10,60 @@ models = [
     "yolo26x-pose.pt"
 ]
 
-image_path = "person.jpg"
+# 결과 저장용 리스트
+results_table = []
 
 for model_name in models:
-    print("\n" + "="*50)
-    print(f"Testing model: {model_name}")
-    print("="*50)
-
-    # 1. 모델 로드
     model = YOLO(model_name)
 
-    # 2. 추론 시간 측정
+    model("image6.png", save=False, verbose=False)
+
     start_time = time.time()
+    results = model("CCTV.mp4", conf=0.15, save=True, exist_ok=False)
+    infer_time = time.time() - start_time
 
-    results = model(
-        "image4.png",
-        save=True,
-        exist_ok=False
-    )
+    persons = 0
+    min_conf = "-"
 
-    end_time = time.time()
-    inference_time = end_time - start_time
-
-    print(f"Inference Time: {inference_time:.3f} sec")
-
-    # 3. 결과 분석
     for r in results:
         if r.keypoints is None:
-            print("No keypoints detected.")
             continue
 
-        xy = r.keypoints.xy.cpu().numpy()
+        xy   = r.keypoints.xy.cpu().numpy()
         conf = r.keypoints.conf.cpu().numpy()
+        persons = len(xy)
 
-        print(f"Detected persons: {len(xy)}")
+        if persons > 0:
+            min_conf = f"{conf[0].min():.3f}"
 
-        # 첫 번째 사람 기준 간단 비교
-        if len(xy) > 0:
-            min_conf = conf[0].min()
-            print(f"Minimum keypoint confidence (person 0): {min_conf:.3f}")
+    results_table.append({
+        "model":      model_name,
+        "infer_time": infer_time,
+        "persons":    persons,
+        "min_conf":   min_conf,
+    })
+
+# ── 테이블 출력 ──────────────────────────────────────────
+col_w = [20, 14, 10, 12]   # 각 컬럼 너비
+
+header = (
+    f"{'Model':<{col_w[0]}}"
+    f"{'Infer(sec)':^{col_w[1]}}"
+    f"{'Persons':^{col_w[2]}}"
+    f"{'Min Conf':^{col_w[3]}}"
+)
+sep = "-" * sum(col_w)
+
+print("\n" + sep)
+print(header)
+print(sep)
+
+for row in results_table:
+    print(
+        f"{row['model']:<{col_w[0]}}"
+        f"{row['infer_time']:^{col_w[1]}.3f}"
+        f"{row['persons']:^{col_w[2]}}"
+        f"{str(row['min_conf']):^{col_w[3]}}"
+    )
+
+print(sep)
